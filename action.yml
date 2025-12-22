@@ -1,0 +1,149 @@
+name: 'Changelog Summary'
+description: 'Summarize git commits with AI and post to Slack'
+author: 'Evgeny Oleynik'
+
+branding:
+  icon: 'git-commit'
+  color: 'blue'
+
+inputs:
+  slack-webhook:
+    description: 'Slack webhook URL'
+    required: true
+  llm-provider:
+    description: 'LLM provider: gemini, openai, or anthropic'
+    required: false
+    default: 'gemini'
+  llm-api-key:
+    description: 'API key for the LLM provider'
+    required: true
+  since:
+    description: 'Time range for commits (e.g., "24 hours ago", "7 days ago")'
+    required: false
+    default: '24 hours ago'
+  header:
+    description: 'Header text for the message'
+    required: false
+    default: 'Daily Update'
+  voice:
+    description: 'Summary voice: founder, developer, or marketing'
+    required: false
+    default: 'founder'
+  project-name:
+    description: 'Project name for the header'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Generate and send summary
+      shell: bash
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook }}
+        LLM_PROVIDER: ${{ inputs.llm-provider }}
+        LLM_API_KEY: ${{ inputs.llm-api-key }}
+        SINCE: ${{ inputs.since }}
+        HEADER: ${{ inputs.header }}
+        VOICE: ${{ inputs.voice }}
+        PROJECT_NAME: ${{ inputs.project-name }}
+      run: |
+        set -euo pipefail
+
+        # Default project name to repo name
+        if [ -z "$PROJECT_NAME" ]; then
+          PROJECT_NAME="${GITHUB_REPOSITORY##*/}"
+        fi
+
+        DATE_DISPLAY=$(date +"%b %d")
+
+        # Get commits with full messages
+        COMMITS=$(git log --since="$SINCE" --pretty=format:"- %s%n%b" --no-merges 2>/dev/null || echo "")
+        COMMIT_COUNT=$(git log --since="$SINCE" --oneline --no-merges | wc -l | tr -d ' ')
+
+        # Exit if no commits
+        if [ "$COMMIT_COUNT" -eq 0 ] || [ -z "$COMMITS" ]; then
+          echo "No commits found since $SINCE, skipping notification"
+          exit 0
+        fi
+
+        CONTRIBUTOR_COUNT=$(git log --since="$SINCE" --pretty=format:"%an" --no-merges | sort -u | wc -l | tr -d ' ')
+
+        # Build prompt based on voice
+        case "$VOICE" in
+          founder)
+            PROMPT="Summarize these commits for a busy founder. Be direct - what actually shipped? Rules: 3-5 bullets, no fluff, no 'exciting updates' BS. Focus on what changed, not how hard it was. Use Slack formatting: • for bullets, surround key terms with single asterisks for bold. Commits: $COMMITS"
+            ;;
+          developer)
+            PROMPT="Summarize these commits for developers. Focus on technical changes: APIs, breaking changes, new features, bug fixes. Be specific about what changed. Rules: 3-5 bullets. Use Slack formatting: • for bullets, surround key terms with single asterisks for bold. Commits: $COMMITS"
+            ;;
+          marketing)
+            PROMPT="Summarize these commits for a product update announcement. Focus on user-facing improvements and new capabilities. Keep it positive but not over the top. Rules: 3-5 bullets. Use Slack formatting: • for bullets, surround key terms with single asterisks for bold. Commits: $COMMITS"
+            ;;
+          *)
+            PROMPT="Summarize these commits concisely. Rules: 3-5 bullets. Use Slack formatting: • for bullets, surround key terms with single asterisks for bold. Commits: $COMMITS"
+            ;;
+        esac
+
+        # Call LLM based on provider
+        case "$LLM_PROVIDER" in
+          gemini)
+            REQUEST_JSON=$(jq -n --arg prompt "$PROMPT" '{
+              contents: [{parts: [{text: $prompt}]}],
+              generationConfig: {temperature: 0.5, maxOutputTokens: 1000}
+            }')
+            RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$LLM_API_KEY" \
+              -H 'Content-Type: application/json' \
+              -d "$REQUEST_JSON")
+            SUMMARY=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
+            ;;
+          openai)
+            REQUEST_JSON=$(jq -n --arg prompt "$PROMPT" '{
+              model: "gpt-4o-mini",
+              messages: [{role: "user", content: $prompt}],
+              temperature: 0.5,
+              max_tokens: 1000
+            }')
+            RESPONSE=$(curl -s "https://api.openai.com/v1/chat/completions" \
+              -H "Authorization: Bearer $LLM_API_KEY" \
+              -H 'Content-Type: application/json' \
+              -d "$REQUEST_JSON")
+            SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+            ;;
+          anthropic)
+            REQUEST_JSON=$(jq -n --arg prompt "$PROMPT" '{
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 1000,
+              messages: [{role: "user", content: $prompt}]
+            }')
+            RESPONSE=$(curl -s "https://api.anthropic.com/v1/messages" \
+              -H "x-api-key: $LLM_API_KEY" \
+              -H "anthropic-version: 2023-06-01" \
+              -H 'Content-Type: application/json' \
+              -d "$REQUEST_JSON")
+            SUMMARY=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
+            ;;
+          *)
+            echo "Unknown LLM provider: $LLM_PROVIDER"
+            exit 1
+            ;;
+        esac
+
+        # Check for error
+        if [ -z "$SUMMARY" ]; then
+          echo "LLM API error. Response: $RESPONSE"
+          exit 1
+        fi
+
+        # Build and send Slack message
+        SLACK_JSON=$(jq -n \
+          --arg header "$PROJECT_NAME $HEADER ($DATE_DISPLAY)" \
+          --arg summary "$SUMMARY" \
+          --arg footer "$COMMIT_COUNT commits by $CONTRIBUTOR_COUNT contributor(s)" \
+          '{text: ("*" + $header + "*\n\n" + $summary + "\n\n_" + $footer + "_")}')
+
+        curl -sf -X POST -H 'Content-type: application/json' \
+          -d "$SLACK_JSON" \
+          "$SLACK_WEBHOOK_URL"
+
+        echo "Summary sent to Slack!"
