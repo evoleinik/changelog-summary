@@ -14,10 +14,6 @@ inputs:
     description: 'LLM provider: gemini, openai, or anthropic'
     required: false
     default: 'gemini'
-  llm-model:
-    description: 'Model to use (defaults: gemini-2.0-flash-lite, gpt-4o-mini, claude-sonnet-4-20250514)'
-    required: false
-    default: ''
   llm-api-key:
     description: 'API key for the LLM provider'
     required: true
