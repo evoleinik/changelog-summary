@@ -88,11 +88,18 @@ runs:
         # Call LLM based on provider
         case "$LLM_PROVIDER" in
           gemini)
+            # maxOutputTokens must cover thinking tokens too: Gemini 3.x flash
+            # spends 800-950 of them before writing a word, which silently
+            # truncated every summary mid-sentence at the old 1000 cap.
             REQUEST_JSON=$(jq -n --arg prompt "$PROMPT" '{
               contents: [{parts: [{text: $prompt}]}],
-              generationConfig: {temperature: 0.5, maxOutputTokens: 1000}
+              generationConfig: {
+                temperature: 0.5,
+                maxOutputTokens: 4000,
+                thinkingConfig: {thinkingLevel: "low"}
+              }
             }')
-            RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=$LLM_API_KEY" \
+            RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key=$LLM_API_KEY" \
               -H 'Content-Type: application/json' \
               -d "$REQUEST_JSON")
             SUMMARY=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')

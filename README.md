@@ -74,7 +74,7 @@ jobs:
 ## LLM Providers
 
 ### Gemini (default)
-- Model: `gemini-3-flash-preview`
+- Model: `gemini-3.7-flash`
 - Get API key: [Google AI Studio](https://aistudio.google.com/apikey)
 
 ### OpenAI
