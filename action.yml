@@ -103,6 +103,7 @@ runs:
               -H 'Content-Type: application/json' \
               -d "$REQUEST_JSON")
             SUMMARY=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
+            TRUNCATED=$(echo "$RESPONSE" | jq -r 'if .candidates[0].finishReason == "MAX_TOKENS" then "yes" else "no" end')
             ;;
           openai)
             REQUEST_JSON=$(jq -n --arg prompt "$PROMPT" '{
@@ -116,6 +117,7 @@ runs:
               -H 'Content-Type: application/json' \
               -d "$REQUEST_JSON")
             SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+            TRUNCATED=$(echo "$RESPONSE" | jq -r 'if .choices[0].finish_reason == "length" then "yes" else "no" end')
             ;;
           anthropic)
             REQUEST_JSON=$(jq -n --arg prompt "$PROMPT" '{
@@ -129,6 +131,7 @@ runs:
               -H 'Content-Type: application/json' \
               -d "$REQUEST_JSON")
             SUMMARY=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
+            TRUNCATED=$(echo "$RESPONSE" | jq -r 'if .stop_reason == "max_tokens" then "yes" else "no" end')
             ;;
           *)
             echo "Unknown LLM provider: $LLM_PROVIDER"
@@ -139,6 +142,15 @@ runs:
         # Check for error
         if [ -z "$SUMMARY" ]; then
           echo "LLM API error. Response: $RESPONSE"
+          exit 1
+        fi
+
+        # A truncated summary is not an empty one, so the check above misses it.
+        # Fail instead of posting half a sentence to Slack.
+        if [ "${TRUNCATED:-no}" = "yes" ]; then
+          echo "::error::LLM hit its output cap and the summary is cut off mid-sentence. Nothing was posted to Slack."
+          echo "Fix: raise maxOutputTokens in action.yml. On Gemini 3.x flash, thinking tokens count against that cap, so also set thinkingConfig.thinkingLevel to low."
+          echo "Truncated summary was: $SUMMARY"
           exit 1
         fi
 
