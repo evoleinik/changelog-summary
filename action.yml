@@ -158,7 +158,9 @@ runs:
         At most four categories per person. One Plumbing bullet per person, never more.
         HARD CAP: three leaves per category. Never four. If a category has more, keep the three that matter and drop the rest.
         Under that cap *New* beats *Fix*, and *Fix* beats *Docs*. A *Docs* leaf never displaces a *New* or a *Fix* one.
-        Drop generated bookkeeping outright. Daily snapshots, decision logs and manifest refreshes are cron output, not work.
+        Generated bookkeeping ranks below every other *Docs* leaf. Daily snapshots, decision logs,
+        manifest refreshes and auto-curate doc dumps are cron output. Give one a leaf only when the
+        person has nothing else left in that category.
         A leaf belongs to exactly one category. If two could fit, pick the category whose description names the thing.
         Within a person, order categories Catalog, Distribution, Visibility, AX, Product, Plumbing.
 
