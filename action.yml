@@ -72,7 +72,35 @@ runs:
         # Build prompt based on voice
         case "$VOICE" in
           founder)
-            PROMPT="Summarize these commits for a busy founder. Be direct - what actually shipped? Rules: 3-5 bullets, no fluff, no 'exciting updates' BS. Focus on what changed, not how hard it was. Use Slack formatting: • for bullets, surround key terms with single asterisks for bold. Commits: $COMMITS"
+            PROMPT="Summarize these commits for the founder of $PROJECT_NAME, in his own voice.
+
+        VOICE
+        Direct and skeptical. Plain English, short everyday words. One idea per sentence, around 15 words. No sentence over 30 words. No em-dashes, no semicolons, no mid-sentence colons. Split into two sentences instead. No 'not X but Y' contrasts. No metaphors, no jargon, no buzzwords. Banned words: leverage, surface (as a verb), orchestrate, robust, holistic, seamless, powerful, exciting, significantly, comprehensive, enable, unlock (unless a literal unlock).
+
+        NEVER INFLATE
+        Say what changed and what it now makes possible. Never say how hard it was, how much work it took, or how many files moved. Drop adjectives. No 'major', 'big', 'huge', 'critical', 'significant'. If the day was small, say it was small. Never pad to reach five bullets. Three real bullets beat five padded ones.
+
+        CATEGORIES
+        Every bullet starts with one category tag from this list, bolded, then a colon. Never invent a tag.
+        Catalog: vendor catalogs, extraction, golden records, product identity and dedup, plus the receipts, provenance, accuracy gates and fabrication guards that make those records trustworthy. This is one area, not two.
+        Distribution: MCP, ACP and shop API, agents.airshelf.ai, GMC feeds, edge serving.
+        Visibility: benchmarks, citations, the content loop, apex articles, share of voice.
+        AX: the AX score itself, ax.airshelf.ai, readiness audits, paid audits.
+        Product: merchant dashboard, widget and BIME, onboarding, billing.
+        Plumbing: CI, verifiers, cron, infrastructure, delegation. At most ONE bullet, ever.
+
+        RULES
+        Three to five bullets, one or two sentences each. Never more than five.
+        One bullet per category at most. Merge every commit in a category into that one bullet.
+        Write what the change does, not where it lives. Name a file or script only when that file is the point.
+        Order the bullets Catalog, Distribution, Visibility, AX, Product, Plumbing.
+        If only plumbing shipped, say that plainly in one or two bullets and stop.
+        This is Slack, not Markdown. Bold is ONE asterisk on each side, like *Catalog*. Double asterisks render literally in Slack and are always wrong. Never use them.
+        Start every bullet with the character • followed by a space. Do not use a hyphen or an asterisk as the list marker.
+        Bold the category tag and any product or file name.
+
+        COMMITS
+        $COMMITS"
             ;;
           developer)
             PROMPT="Summarize these commits for developers. Focus on technical changes: APIs, breaking changes, new features, bug fixes. Be specific about what changed. Rules: 3-5 bullets. Use Slack formatting: • for bullets, surround key terms with single asterisks for bold. Commits: $COMMITS"
@@ -85,51 +113,59 @@ runs:
             ;;
         esac
 
+        # jq takes the prompt from a FILE, never as an argv string. Linux caps a
+        # single argument at 128KB (MAX_ARG_STRLEN), and a busy day's commit body
+        # already runs past 80KB, so --arg dies with 'Argument list too long'.
+        PROMPT_FILE="$(mktemp)"
+        REQUEST_FILE="$(mktemp)"
+        trap 'rm -f "$PROMPT_FILE" "$REQUEST_FILE"' EXIT
+        printf '%s' "$PROMPT" > "$PROMPT_FILE"
+
         # Call LLM based on provider
         case "$LLM_PROVIDER" in
           gemini)
             # maxOutputTokens must cover thinking tokens too: Gemini 3.x flash
             # spends 800-950 of them before writing a word, which silently
             # truncated every summary mid-sentence at the old 1000 cap.
-            REQUEST_JSON=$(jq -n --arg prompt "$PROMPT" '{
+            jq -n --rawfile prompt "$PROMPT_FILE" '{
               contents: [{parts: [{text: $prompt}]}],
               generationConfig: {
                 temperature: 0.5,
                 maxOutputTokens: 4000,
                 thinkingConfig: {thinkingLevel: "low"}
               }
-            }')
+            }' > "$REQUEST_FILE"
             RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key=$LLM_API_KEY" \
               -H 'Content-Type: application/json' \
-              -d "$REQUEST_JSON")
+              -d @"$REQUEST_FILE")
             SUMMARY=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
             TRUNCATED=$(echo "$RESPONSE" | jq -r 'if .candidates[0].finishReason == "MAX_TOKENS" then "yes" else "no" end')
             ;;
           openai)
-            REQUEST_JSON=$(jq -n --arg prompt "$PROMPT" '{
+            jq -n --rawfile prompt "$PROMPT_FILE" '{
               model: "gpt-4o-mini",
               messages: [{role: "user", content: $prompt}],
               temperature: 0.5,
               max_tokens: 1000
-            }')
+            }' > "$REQUEST_FILE"
             RESPONSE=$(curl -s "https://api.openai.com/v1/chat/completions" \
               -H "Authorization: Bearer $LLM_API_KEY" \
               -H 'Content-Type: application/json' \
-              -d "$REQUEST_JSON")
+              -d @"$REQUEST_FILE")
             SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
             TRUNCATED=$(echo "$RESPONSE" | jq -r 'if .choices[0].finish_reason == "length" then "yes" else "no" end')
             ;;
           anthropic)
-            REQUEST_JSON=$(jq -n --arg prompt "$PROMPT" '{
+            jq -n --rawfile prompt "$PROMPT_FILE" '{
               model: "claude-sonnet-4-20250514",
               max_tokens: 1000,
               messages: [{role: "user", content: $prompt}]
-            }')
+            }' > "$REQUEST_FILE"
             RESPONSE=$(curl -s "https://api.anthropic.com/v1/messages" \
               -H "x-api-key: $LLM_API_KEY" \
               -H "anthropic-version: 2023-06-01" \
               -H 'Content-Type: application/json' \
-              -d "$REQUEST_JSON")
+              -d @"$REQUEST_FILE")
             SUMMARY=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
             TRUNCATED=$(echo "$RESPONSE" | jq -r 'if .stop_reason == "max_tokens" then "yes" else "no" end')
             ;;

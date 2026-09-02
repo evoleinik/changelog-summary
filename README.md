@@ -41,7 +41,11 @@ jobs:
 
 ## Voice Styles
 
-**founder** - Direct, no-BS summary of what shipped. Cuts through the noise.
+**founder** - Direct, no-BS summary of what shipped. Every bullet is tagged with the area it moves
+(Catalog, Distribution, Visibility, AX, Product, Plumbing), so the summary reads as progress against
+the roadmap rather than a list of commits. The prompt bans inflation: no adjectives, no "how hard it
+was", and no padding to reach five bullets. Tags are AirShelf-shaped; edit the CATEGORIES block in
+`action.yml` for another project.
 
 **developer** - Technical focus: APIs, breaking changes, bug fixes. Specific about what changed.
 
