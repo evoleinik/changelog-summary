@@ -37,11 +37,13 @@ jobs:
 | `since` | No | `24 hours ago` | Time range for commits |
 | `header` | No | `Daily Update` | Header text (e.g., "Weekly Update") |
 | `voice` | No | `founder` | Summary style: `founder`, `developer`, or `marketing` |
+| `identity-map` | No | _(empty)_ | Newline list of `match = Real Name` rules folding bot and alias authors into the human who owns them. Matches on author email or author name; anything unmatched keeps its own name. |
 | `project-name` | No | repo name | Project name in header |
 
 ## Voice Styles
 
-**founder** - Direct, no-BS summary of what shipped. Every bullet is tagged with the area it moves
+**founder** - Direct, no-BS summary of what shipped, grouped by person, then by area, then as a
+nested list of short fragments rather than prose. Every bullet is tagged with the area it moves
 (Catalog, Distribution, Visibility, AX, Product, Plumbing), so the summary reads as progress against
 the roadmap rather than a list of commits. The prompt bans inflation: no adjectives, no "how hard it
 was", and no padding to reach five bullets. Tags are AirShelf-shaped; edit the CATEGORIES block in

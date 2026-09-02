@@ -33,6 +33,15 @@ inputs:
     description: 'Project name for the header'
     required: false
     default: ''
+  identity-map:
+    description: |
+      Newline-separated "match = Real Name" rules that fold bot and alias authors
+      into the human who owns them. Match on the author email or the author name.
+      Anything unmatched keeps its own name. Example:
+        evoleinik@gmail.com = Evgeny
+        github-actions[bot] = Evgeny
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -47,6 +56,7 @@ runs:
         HEADER: ${{ inputs.header }}
         VOICE: ${{ inputs.voice }}
         PROJECT_NAME: ${{ inputs.project-name }}
+        IDENTITY_MAP: ${{ inputs.identity-map }}
       run: |
         set -euo pipefail
 
@@ -57,9 +67,31 @@ runs:
 
         DATE_DISPLAY=$(date +"%b %d")
 
-        # Get commits with full messages
-        COMMITS=$(git log --since="$SINCE" --pretty=format:"- %s%n%b" --no-merges 2>/dev/null || echo "")
         COMMIT_COUNT=$(git log --since="$SINCE" --oneline --no-merges | wc -l | tr -d ' ')
+
+        # Fold bot and alias authors into the human who owns them, so one person
+        # committing as Eugene, AirShelf Loop and github-actions[bot] counts once.
+        declare -A IDENTITY
+        while IFS= read -r rule; do
+          case "$rule" in *=*) ;; *) continue ;; esac
+          key="${rule%%=*}"; val="${rule#*=}"
+          key="$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          val="$(printf '%s' "$val" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -n "$key" ] && [ -n "$val" ]; then IDENTITY["$key"]="$val"; fi
+        done <<< "${IDENTITY_MAP:-}"
+
+        # Records are \x1e-separated, fields \x1f-separated, so a commit body
+        # containing newlines cannot break the parse.
+        COMMITS=""
+        AUTHORS=""
+        while IFS=$'\x1f' read -r -d $'\x1e' C_NAME C_EMAIL C_BODY; do
+          C_NAME="${C_NAME#$'\n'}"
+          WHO="${IDENTITY[$C_EMAIL]:-}"
+          if [ -z "$WHO" ]; then WHO="${IDENTITY[$C_NAME]:-$C_NAME}"; fi
+          COMMITS+="[$WHO] $C_BODY"$'\n'
+          AUTHORS+="$WHO"$'\n'
+        done < <(git log --since="$SINCE" --no-merges \
+          --pretty=format:"%an%x1f%ae%x1f%s%n%b%x1e" 2>/dev/null || true)
 
         # Exit if no commits
         if [ "$COMMIT_COUNT" -eq 0 ] || [ -z "$COMMITS" ]; then
@@ -67,37 +99,66 @@ runs:
           exit 0
         fi
 
-        CONTRIBUTOR_COUNT=$(git log --since="$SINCE" --pretty=format:"%an" --no-merges | sort -u | wc -l | tr -d ' ')
+        CONTRIBUTOR_COUNT=$(printf '%s' "$AUTHORS" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')
 
         # Build prompt based on voice
         case "$VOICE" in
           founder)
             PROMPT="Summarize these commits for the founder of $PROJECT_NAME, in his own voice.
+        Each commit is prefixed with its author in square brackets.
+
+        SHAPE
+        Group by person. Under each person, group by category. Under each category, list the work.
+        Three levels, like this, and nothing else:
+
+        *Evgeny*
+        • *Distribution*
+            ◦ Repointed ACP discovery routes onto agents.airshelf.ai
+            ◦ Opened the acp.json well-known entry to public traffic
+        • *Plumbing*
+            ◦ pytest sharded across three runners, CI 8 min down to 2 min
+
+        *Aditi*
+        • *Product*
+            ◦ Priority action engine on the merchant overview
+
+        WRITE FRAGMENTS, NOT SENTENCES
+        Each leaf is a short fragment. Around 8 words, never more than 14. No full stop at the end.
+        Start it with a plain past-tense verb or the name of the thing. No connectors, no because, no which, no while.
+        One fact per leaf. If a leaf carries two facts, it is two leaves.
+        No em-dashes, no semicolons, no mid-sentence colons.
 
         VOICE
-        Direct and skeptical. Plain English, short everyday words. One idea per sentence, around 15 words. No sentence over 30 words. No em-dashes, no semicolons, no mid-sentence colons. Split into two sentences instead. No 'not X but Y' contrasts. No metaphors, no jargon, no buzzwords. Banned words: leverage, surface (as a verb), orchestrate, robust, holistic, seamless, powerful, exciting, significantly, comprehensive, enable, unlock (unless a literal unlock).
+        Direct and skeptical. Plain English, short everyday words. No metaphors, no jargon, no buzzwords.
+        Banned words: leverage, surface (as a verb), orchestrate, robust, holistic, seamless, powerful, exciting, significantly, comprehensive, finally.
 
         NEVER INFLATE
-        Say what changed and what it now makes possible. Never say how hard it was, how much work it took, or how many files moved. Drop adjectives. No 'major', 'big', 'huge', 'critical', 'significant'. If the day was small, say it was small. Never pad to reach five bullets. Three real bullets beat five padded ones.
+        Say what changed and what it now makes possible. Never say how hard it was, how much work it took, or how many files moved.
+        Drop adjectives. No major, big, huge, critical, significant.
+        If someone had a quiet day, give them one leaf. Never pad. Never invent work that is not in the commits.
 
         CATEGORIES
-        Every bullet starts with one category tag from this list, bolded, then a colon. Never invent a tag.
+        Use only these tags. Never invent one.
         Catalog: vendor catalogs, extraction, golden records, product identity and dedup, plus the receipts, provenance, accuracy gates and fabrication guards that make those records trustworthy. This is one area, not two.
         Distribution: MCP, ACP and shop API, agents.airshelf.ai, GMC feeds, edge serving.
         Visibility: benchmarks, citations, the content loop, apex articles, share of voice.
         AX: the AX score itself, ax.airshelf.ai, readiness audits, paid audits.
         Product: merchant dashboard, widget and BIME, onboarding, billing.
-        Plumbing: CI, verifiers, cron, infrastructure, delegation. At most ONE bullet, ever.
+        Plumbing: CI, verifiers, cron, infrastructure, delegation.
+        Tie-breakers. Anything measuring how AI answers, including a new benchmark provider, is Visibility. The chat widget is Product.
 
-        RULES
-        Three to five bullets, one or two sentences each. Never more than five.
-        One bullet per category at most. Merge every commit in a category into that one bullet.
-        Write what the change does, not where it lives. Name a file or script only when that file is the point.
-        Order the bullets Catalog, Distribution, Visibility, AX, Product, Plumbing.
-        If only plumbing shipped, say that plainly in one or two bullets and stop.
+        LIMITS
+        Order people by how much they shipped, most first. Use the name in the brackets exactly, and never mention a bot.
+        At most four categories per person. One Plumbing bullet per person, never more.
+        HARD CAP: three leaves per category. Never four. If a category has more, keep the three that matter and drop the rest.
+        A leaf belongs to exactly one category. If two could fit, pick the category whose description names the thing.
+        Within a person, order categories Catalog, Distribution, Visibility, AX, Product, Plumbing.
+
+        SLACK FORMATTING
         This is Slack, not Markdown. Bold is ONE asterisk on each side, like *Catalog*. Double asterisks render literally in Slack and are always wrong. Never use them.
-        Start every bullet with the character • followed by a space. Do not use a hyphen or an asterisk as the list marker.
-        Bold the category tag and any product or file name.
+        The person name is a bold line on its own, with a blank line before it.
+        Category lines start with • and a space. Leaf lines start with four spaces then ◦ and a space.
+        Bold the category tag. Do not bold anything inside a leaf.
 
         COMMITS
         $COMMITS"
@@ -190,11 +251,17 @@ runs:
           exit 1
         fi
 
+        # if/fi, not "[ ] && x": under set -e a trailing false && list can abort the job.
+        COMMIT_WORD="commits"
+        if [ "$COMMIT_COUNT" -eq 1 ]; then COMMIT_WORD="commit"; fi
+        CONTRIBUTOR_WORD="contributors"
+        if [ "$CONTRIBUTOR_COUNT" -eq 1 ]; then CONTRIBUTOR_WORD="contributor"; fi
+
         # Build and send Slack message
         SLACK_JSON=$(jq -n \
           --arg header "$PROJECT_NAME $HEADER ($DATE_DISPLAY)" \
           --arg summary "$SUMMARY" \
-          --arg footer "$COMMIT_COUNT commits by $CONTRIBUTOR_COUNT contributor(s)" \
+          --arg footer "$COMMIT_COUNT $COMMIT_WORD by $CONTRIBUTOR_COUNT $CONTRIBUTOR_WORD" \
           '{text: ("*" + $header + "*\n\n" + $summary + "\n\n_" + $footer + "_")}')
 
         curl -sf -X POST -H 'Content-type: application/json' \
